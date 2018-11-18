@@ -1,0 +1,14 @@
+extends layout.pug
+
+block content
+  if user
+    div= user.name
+
+    di
+      h2 他发过的帖子
+      ul
+        each post in posts
+          li
+            a(href="/post/" + post.id)= post.content
+  else
+    |没有您要找的用户

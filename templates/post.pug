@@ -1,0 +1,24 @@
+extends layout.pug
+
+block content
+  div
+    h1= post.title
+    p
+      span= post.timestamp
+      span 发帖人: #{post.userid}
+    div= post.content
+
+    ul
+      each c in comment
+        li
+          div
+            span= c.timestamp
+            span
+            a(href="/user/" + c.userid)= c.userid
+          div= c.content
+
+    form(action="/add-comment" method="post")
+      input(hidden=true name="postid" value=post.id)
+      textarea(placeholder="请输入您的评论" name="content")
+      br
+      button 提交评论
