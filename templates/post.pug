@@ -4,21 +4,24 @@ block content
   div
     h1= post.title
     p
-      span= post.timestamp
-      span 发帖人: #{post.userid}
+      span= new Date(post.timestamp).toLocaleString()
+      span 
+        a(href="/user/" + post.userId) 发帖人: #{post.name}
+        img(width=30 height=30 src="/avatars/" + post.avatar, alt=post.name)
     div= post.content
 
     ul
-      each c in comment
+      each comment in comments
         li
           div
-            span= c.timestamp
+            span= new Date(comment.timestamp).toLocaleString()
+            img(width=30 height=30 src="/avatars/" + comment.avatar, alt=comment.name)
             span
-            a(href="/user/" + c.userid)= c.userid
-          div= c.content
+            a(href="/user/" + comment.userId)= comment.name
+          div= comment.content
 
     form(action="/add-comment" method="post")
-      input(hidden=true name="postid" value=post.id)
+      input(hidden=true name="postId" value=post.id)
       textarea(placeholder="请输入您的评论" name="content")
       br
       button 提交评论

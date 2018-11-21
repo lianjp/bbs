@@ -1,78 +1,17 @@
 const express = require('express')
 const bodyParser = require('body-parser')
+const cookieParser = require('cookie-parser')
+const multer = require('multer')
 const path = require('path')
+const sqlite = require('sqlite')
+
+const upload = multer({dest: path.join(__dirname, './user-uploaded')})
 
 const port = 3000
 
-const users = [{
-  name: 'zs',
-  password: '123456',
-  id: 1,
-}, {
-  name: 'ls',
-  password: '123456',
-  id: 2,
-}, {
-  name: 'ww',
-  password: '123456',
-  id: 3,
-}]
-users.maxid = 4
+var dbPromise = sqlite.open('./bbs.db', {Promise})
 
-const posts = [{
-  id: 1,
-  title: 'hello',
-  content: 'hello hello',
-  timestamp: Date.now(),
-  userid: 2,
-}, {
-  id: 2,
-  title: 'world',
-  content: 'world world',
-  timestamp: Date.now() - 100000,
-  userid: 3,
-}, {
-  id: 3,
-  title: 'foo',
-  content: 'foo foo',
-  timestamp: Date.now() - 200000,
-  userid: 1,
-}]
-posts.maxid = 4
-
-const comments = [{
-  id: 1,
-  postid: 2,
-  userid: 1,
-  content: '顶',
-  timestamp: Date.now() - 56789,
-}, {
-  id: 2,
-  postid: 2,
-  userid: 2,
-  content: '顶',
-  timestamp: Date.now() - 56789,
-}, {
-  id: 3,
-  postid: 2,
-  userid: 3,
-  content: '顶',
-  timestamp: Date.now() - 56789,
-}, {
-  id: 4,
-  postid: 2,
-  userid: 1,
-  content: '顶',
-  timestamp: Date.now() - 56789,
-}, {
-  id: 5,
-  postid: 2,
-  userid: 2,
-  content: '顶',
-  timestamp: Date.now() - 56789,
-}]
-comments.maxid = 6
-
+var sessions = {}
 
 const app = express()
 
@@ -84,71 +23,144 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(express.static('./static'))
+app.use('/static', express.static('./static'))
+app.use('/avatars', express.static('./user-uploaded'))
+app.use(cookieParser('aaabbbccc'))
 app.use(bodyParser.urlencoded())
 
-app.get('/', (req, res, next) => {
-  res.render('index.pug', {posts})  
+app.use(function sessionMiddleware(req, res, next) {
+  if(!req.cookies.sessionId) {
+    res.cookie('sessionId', Math.random().toString(16).substr(2))
+  }
+  next()
 })
+
+app.use(async (req, res, next) => {
+  req.user = await db.get("SELECT * FROM users WHERE id=?", req.signedCookies.userId)
+  console.log(req.user)
+  next()
+})
+
+app.get('/', async (req, res, next) => {
+  var posts = await db.all("SELECT * FROM posts")
+  res.render('index.pug', {posts, user: req.user})  
+})
+
+app.route('/add-post')
+  .get((req, res, next) => {
+    res.render('add-post.pug', {user: req.user})
+  })
+  .post(async (req, res, next) => {
+
+    if (req.signedCookies.userId) {
+      await db.run("INSERT INTO posts (userId, title, content, timestamp) VALUES (?, ?, ?, ?)", req.signedCookies.userId, req.body.title, req.body.content, Date.now())
+      var newPost = await db.get("SELECT * FROM posts ORDER BY timestamp DESC LIMIT 1")
+      res.redirect('/post/' + newPost.id)
+    } else {
+      res.send('you are not logged in!')
+    }
+
+  })
 
 app.route('/register')
   .get((req, res, next) => {
-    res.sendFile(path.join(__dirname, './static/register.html'))
+    res.render('register.pug')
   })
-  .post((req, res, next) => {
-    if (users.find(it => it.name == req.body.username)) {
-      res.end('用户名已经注册')
+  .post(upload.single('avatar'), async (req, res, next) => {
+    var user = await db.get("SELECT * FROM users WHERE name=?", req.body.username)
+    if (user) {
+      res.send('username hase been registered')
     }else {
-      users.push({
-        id: users.maxid++,
-        name: req.body.username,
-        password: req.body.password,
-      })
+      await db.run("INSERT INTO users (name, password, avatar) VALUES (?,?, ?)", req.body.username, req.body.password, req.file && req.file.filename)
       res.redirect('/login')
     }        
   })
 
-app.get('/user/:userid', (req, res, next) => {
-  var user = users.find(it => it.id == req.params.userid)
-  var userPosts = posts.filter(it => it.userid == req.params.userid)
-  if (user) {
+app.get('/user/:userId', async (req, res, next) => {
+  // var user = await db.get("SELECT * FROM users WHERE id=?", req.params.userId)  //先再users表中查出有无此用户  
+  if (req.user) {
+    var userPosts = await db.all("SELECT * FROM posts WHERE userId=?", req.params.userId)  //如果有再再posts表中查出此用户所有发过的贴子
+    var userComment = await db.all("SELECT comments.*, title as postTitle FROM comments JOIN posts ON comments.userId=posts.userId WHERE comments.userId=?", req.params.userId)
     res.render('user.pug', {
-      user,
-      posts: userPosts
+      user: req.user,
+      posts: userPosts,
+      comments: userComment
     })
   }else {
-    res.render('user.pug', {user: null})
+    res.render('user.pug', {user: req.user})
   }
+})
+
+app.get('/logout', (req, res, next) => {
+  res.clearCookie('userId')
+  res.redirect('/')
 })
 
 app.route('/login')
   .get((req, res, next) => {
-    res.render('login.pug')
+    res.render('login.pug', {user: req.user})
+  })
+  .post(async (req, res, next) => {
+    if (req.body.captcha !== sessions[req.cookies.sessionId].captcha) {
+      res.end('captcha not corect')
+      return
+    }
+    var user = await db.get("SELECT * FROM users WHERE name=? AND password=?", req.body.username, req.body.password)
+    if (user) {
+      res.cookie('userId', user.id, {
+        signed: true,
+      })
+      res.redirect('/')
+    } else {
+      res.send('username or password is not correct')
+    }
   })
 
-app.get('/post/:postid', (req, res, next) => {
-  var postid = req.params.postid
-  var post = posts.find(it => it.id == postid)
-  var comment = comments.filter(it => it.postid == postid)
+app.get('/captcha', async (req, res, next) => {
+  var captcha = Math.random().toString().substr(2, 4)
+  sessions[req.cookies.sessionId] = {
+    captcha: captcha
+  }
+
+  res.setHeader('Content-Type', 'image/svg+xml')
+  res.end(`
+  <svg width="100" 
+  height="50"
+  version="1.1"
+  xmlns="http://www.w3.org/2000/svg">
+    <text x="0" y="20">${
+      captcha
+    }</text>
+  </svg>`)
+  
+})
+
+app.get('/post/:postId', async (req, res, next) => {
+  var post = await db.get("SELECT posts.*, name, avatar FROM posts JOIN users ON posts.userId=users.id WHERE posts.id=?", req.params.postId) 
   if (post) {
-    res.render('post.pug', {post, comment})
+    var comments = await db.all("SELECT comments.*, name, avatar FROM comments JOIN users ON comments.userId=users.id WHERE comments.postId=?", req.params.postId)
+    res.render('post.pug', {post, comments, user: req.user})
   } else {
     res.status(404).render('post-not-found.pug')
   }
 })
 
-app.post('/add-comment', (req, res, next) => {
-  console.log(req.headers, req.body)
-  comments.push({
-    id: comments.maxid++,
-    postid: req.body.postid,
-    userid: 2,
-    content: req.body.content,
-    timestamp: Date.now()
-  })
-  res.redirect('/post/' + req.body.postid)
+app.post('/add-comment', async (req, res, next) => {
+  if (req.signedCookies.userId) {
+    await db.run(`
+      INSERT INTO comments (postId, userId, content, timestamp) 
+      VALUES (?, ?, ?, ?)
+    `, req.body.postId, req.signedCookies.userId, req.body.content, Date.now())
+
+    res.redirect('/post/' + req.body.postId)
+  } else {
+    res.send('not allowed to comment, you are not logged in.')
+  }
 })
 
-app.listen(port, () => {
-  console.log('server listening on port', port)
-})
+;(async () => {
+  db = await dbPromise
+  app.listen(port, () => {
+    console.log('server listening on port', port)
+  })
+})()

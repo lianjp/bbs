@@ -5,6 +5,16 @@ html
     link(rel="stylesheet" href="/static/css/common.css")
 
   body
+    div
+      a(href="/")  首页
+      |   
+      if (user)
+        span 欢迎 #{user.name}
+        a(href="/add-post")  发布
+        a(href="/logout")  登出
+      else
+        a(href="/login")  登录
+        a(href="/register")  注册
     block content
 
     footer
